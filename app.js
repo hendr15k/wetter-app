@@ -1,20 +1,19 @@
 const GEO_API = 'https://geocoding-api.open-meteo.com/v1/search';
 const WEATHER_API = 'https://api.open-meteo.com/v1/forecast';
-const REVERSE_GEO_API = 'https://geocoding-api.open-meteo.com/v1/reverse';
+const REVERSE_GEO_API = 'https://api.bigdatacloud.net/data/reverse-geocode-client';
 
 let currentUnit = 'celsius';
 let selectedCity = null;
 let searchTimeout = null;
 let weatherMap = null;
-let mapMarker = null;
 let currentWeatherData = null;
+let currentTileLayer = null;
 const favoriteKey = 'wetterApp_favorites';
 const themeKey = 'wetterApp_theme';
 
 const cityInput = document.getElementById('cityInput');
 const searchBtn = document.getElementById('searchBtn');
 const suggestions = document.getElementById('suggestions');
-const weatherDisplay = document.getElementById('weatherDisplay');
 const errorDisplay = document.getElementById('errorDisplay');
 const mainContent = document.getElementById('mainContent');
 const unitC = document.getElementById('unitC');
@@ -40,6 +39,8 @@ themeBtn.addEventListener('click', () => {
     themeBtn.textContent = isDark ? '☀️' : '🌙';
     localStorage.setItem(themeKey, isDark ? 'dark' : 'light');
     if (weatherMap) {
+        if (currentTileLayer) weatherMap.removeLayer(currentTileLayer);
+        currentTileLayer = createTileLayer(isDark).addTo(weatherMap);
         setTimeout(() => weatherMap.invalidateSize(), 200);
     }
 });
@@ -67,23 +68,22 @@ geoBtn.addEventListener('click', () => {
 });
 
 async function reverseGeocode(lat, lon) {
+    hideError();
+    let cityName = 'Mein Standort';
     try {
-        hideError();
-        let cityName = 'Mein Standort';
-        try {
-            const res = await fetch(`${REVERSE_GEO_API}?latitude=${lat}&longitude=${lon}&language=de&format=json`);
-            const data = await res.json();
-            if (data.results && data.results.length > 0) {
-                cityName = data.results[0].name;
-            }
-        } catch {}
-        selectedCity = { lat, lon, name: cityName };
-        cityInput.value = cityName;
-        fetchWeather(lat, lon, cityName);
-    } catch {
-        selectedCity = { lat, lon, name: 'Mein Standort' };
-        fetchWeather(lat, lon, 'Mein Standort');
-    }
+        const res = await fetch(`${REVERSE_GEO_API}?latitude=${lat}&longitude=${lon}&localityLanguage=de`);
+        const data = await res.json();
+        if (data.city) {
+            cityName = data.city;
+        } else if (data.locality) {
+            cityName = data.locality;
+        } else if (data.principalSubdivision) {
+            cityName = data.principalSubdivision;
+        }
+    } catch {}
+    selectedCity = { lat, lon, name: cityName };
+    cityInput.value = cityName;
+    fetchWeather(lat, lon, cityName);
 }
 
 // ===== Search =====
@@ -169,9 +169,9 @@ async function fetchWeather(lat, lon, name) {
     hideError();
     const tempUnit = currentUnit === 'celsius' ? 'celsius' : 'fahrenheit';
     const url = `${WEATHER_API}?latitude=${lat}&longitude=${lon}` +
-        `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,pressure_msl,wind_speed_10m` +
+        `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,pressure_msl,wind_speed_10m,wind_direction_10m,is_day` +
         `&hourly=weather_code,temperature_2m,precipitation_probability` +
-        `&daily=weather_code,temperature_2m_max,temperature_2m_min` +
+        `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max` +
         `&timezone=auto&forecast_days=7` +
         `&temperature_unit=${tempUnit}`;
 
@@ -254,6 +254,24 @@ function buildAnimIcon(code) {
 }
 
 // ===== Render Weather =====
+function windDirToCompass(deg) {
+    const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+    return dirs[Math.round(deg / 45) % 8];
+}
+
+function formatTime(isoStr) {
+    return new Date(isoStr).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function uvIndexLabel(uv) {
+    if (uv == null) return '--';
+    if (uv < 3) return `${uv} (Niedrig)`;
+    if (uv < 6) return `${uv} (Mäßig)`;
+    if (uv < 8) return `${uv} (Hoch)`;
+    if (uv < 11) return `${uv} (Sehr hoch)`;
+    return `${uv} (Extrem)`;
+}
+
 function renderWeather(data, name, lat, lon) {
     const current = data.current;
     const daily = data.daily;
@@ -263,10 +281,14 @@ function renderWeather(data, name, lat, lon) {
     const today = new Date();
     const desc = getWeatherDesc(current.weather_code);
     const animIcon = buildAnimIcon(current.weather_code);
+    const isDay = current.is_day === 1;
+    const sunriseStr = daily.sunrise ? formatTime(daily.sunrise[0]) : '--';
+    const sunsetStr = daily.sunset ? formatTime(daily.sunset[0]) : '--';
+    const uvMax = daily.uv_index_max ? daily.uv_index_max[0].toFixed(1) : null;
 
     mainContent.innerHTML = `
         <div class="weather-display">
-            <div class="current-weather">
+            <div class="current-weather${isDay ? '' : ' night'}">
                 <div class="current-header">
                     <div>
                         <h2>${name}</h2>
@@ -288,11 +310,19 @@ function renderWeather(data, name, lat, lon) {
                     </div>
                     <div class="detail-item">
                         <span class="detail-label">Wind</span>
-                        <span class="detail-value">${Math.round(current.wind_speed_10m)} ${windUnit}</span>
+                        <span class="detail-value">${Math.round(current.wind_speed_10m)} ${windUnit} ${windDirToCompass(current.wind_direction_10m)}</span>
                     </div>
                     <div class="detail-item">
                         <span class="detail-label">Luftdruck</span>
                         <span class="detail-value">${Math.round(current.pressure_msl)} hPa</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">UV-Index</span>
+                        <span class="detail-value">${uvIndexLabel(uvMax)}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Sonnenauf/-untergang</span>
+                        <span class="detail-value">🌅 ${sunriseStr} · 🌇 ${sunsetStr}</span>
                     </div>
                 </div>
             </div>
@@ -323,14 +353,22 @@ function renderWeather(data, name, lat, lon) {
 
 function renderHourly(hourly, unitSymbol) {
     const now = new Date();
-    let html = '';
-    const totalHours = Math.min(24, hourly.time.length);
-
-    for (let i = 0; i < totalHours; i++) {
+    let startIndex = 0;
+    for (let i = 0; i < hourly.time.length; i++) {
         const hourDate = new Date(hourly.time[i]);
-        if (hourDate < now && i > 0) continue;
+        if (hourDate.getTime() >= now.getTime() - 3600000) {
+            startIndex = i;
+            break;
+        }
+    }
 
-        const timeStr = i === 0 ? 'Jetzt' : hourDate.toLocaleTimeString('de-DE', {
+    let html = '';
+    const count = Math.min(24, hourly.time.length - startIndex);
+
+    for (let j = 0; j < count; j++) {
+        const i = startIndex + j;
+        const hourDate = new Date(hourly.time[i]);
+        const timeStr = j === 0 ? 'Jetzt' : hourDate.toLocaleTimeString('de-DE', {
             hour: '2-digit',
             minute: '2-digit'
         });
@@ -340,7 +378,7 @@ function renderHourly(hourly, unitSymbol) {
         const rainText = rainProb > 0 ? `<div class="hourly-rain">💧${rainProb}%</div>` : '';
 
         html += `
-            <div class="hourly-item ${i === 0 ? 'now' :''}">
+            <div class="hourly-item ${j === 0 ? 'now' : ''}">
                 <div class="hourly-time">${timeStr}</div>
                 <div class="hourly-icon">${icon}</div>
                 <div class="hourly-temp">${temp}${unitSymbol}</div>
@@ -374,10 +412,22 @@ function renderForecast(daily, unitSymbol) {
 }
 
 // ===== Leaflet Map =====
+function createTileLayer(isDark) {
+    const tileUrl = isDark
+        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+    return L.tileLayer(tileUrl, {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+    });
+}
+
 function initMap(lat, lon, name) {
     if (weatherMap) {
         weatherMap.remove();
         weatherMap = null;
+        currentTileLayer = null;
     }
 
     weatherMap = L.map('weatherMap', {
@@ -386,18 +436,10 @@ function initMap(lat, lon, name) {
         attributionControl: true
     }).setView([lat, lon], 10);
 
-    const tileUrl = document.body.classList.contains('dark')
-        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-
-    L.tileLayer(tileUrl, {
-        attribution: '&copy; OpenStreetMap &copy; CARTO',
-        subdomains: 'abcd',
-        maxZoom: 19
-    }).addTo(weatherMap);
+    currentTileLayer = createTileLayer(document.body.classList.contains('dark')).addTo(weatherMap);
 
     const emoji = getWeatherIcon(currentWeatherData.current.weather_code);
-    mapMarker = L.marker([lat, lon]).addTo(weatherMap)
+    L.marker([lat, lon]).addTo(weatherMap)
         .bindPopup(`<b>${name}</b><br>${emoji} ${getWeatherDesc(currentWeatherData.current.weather_code)}`)
         .openPopup();
 

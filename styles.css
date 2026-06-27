@@ -333,6 +333,10 @@ body {
     margin-bottom: 24px;
 }
 
+.current-weather.night {
+    background: linear-gradient(135deg, #1a1a3e88, #0d0d2b88);
+}
+
 .current-header {
     display: flex;
     justify-content: space-between;
