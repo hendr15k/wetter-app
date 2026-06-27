@@ -5,69 +5,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wetter App</title>
     <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
     <div class="app">
         <header class="header">
-            <h1>Wetter App</h1>
+            <div class="header-top">
+                <h1>Wetter App</h1>
+                <div class="header-buttons">
+                    <button id="geoBtn" class="icon-btn" title="Mein Standort">📍</button>
+                    <button id="themeBtn" class="icon-btn" title="Dark Mode">🌙</button>
+                </div>
+            </div>
             <div class="search-container">
                 <input type="text" id="cityInput" placeholder="Stadt eingeben..." autofocus>
                 <button id="searchBtn">Suchen</button>
                 <div id="suggestions" class="suggestions hidden"></div>
             </div>
-            <div class="units-toggle">
-                <button id="unitC" class="unit-btn active">°C</button>
-                <button id="unitF" class="unit-btn">°F</button>
+            <div class="controls-row">
+                <div class="units-toggle">
+                    <button id="unitC" class="unit-btn active">°C</button>
+                    <button id="unitF" class="unit-btn">°F</button>
+                </div>
+                <button id="favBtn" class="fav-btn" title="Zu Favoriten hinzufügen">☆</button>
+            </div>
+            <div id="favoritesContainer" class="favorites-container hidden">
+                <span class="fav-label">Favoriten:</span>
+                <div id="favoritesList" class="favorites-list"></div>
             </div>
         </header>
 
+        <div id="errorDisplay" class="error hidden"></div>
+
         <main id="mainContent">
             <div class="welcome">
-                <div class="weather-icon-large">🌤️</div>
+                <div class="weather-icon-large">
+                    <div class="anim-icon sunny">
+                        <div class="sun"></div>
+                    </div>
+                </div>
                 <h2>Willkommen!</h2>
                 <p>Gib eine Stadt ein, um das aktuelle Wetter zu sehen.</p>
                 <p class="hint">z.B. Berlin, München, Hamburg, London...</p>
+                <p class="hint"> oder tippe auf 📍 für deinen Standort</p>
             </div>
         </main>
 
-        <div id="errorDisplay" class="error hidden"></div>
-
-        <div id="weatherDisplay" class="weather-display hidden">
-            <div class="current-weather">
-                <div class="current-header">
-                    <div>
-                        <h2 id="cityName">--</h2>
-                        <p id="dateDisplay">--</p>
-                    </div>
-                    <div class="temp-large" id="currentTemp">--</div>
-                </div>
-                <div class="current-details">
-                    <div class="detail-item">
-                        <span class="detail-label">Gefühlt</span>
-                        <span class="detail-value" id="feelsLike">--</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Luftfeuchte</span>
-                        <span class="detail-value" id="humidity">--</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Wind</span>
-                        <span class="detail-value" id="windSpeed">--</span>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">Luftdruck</span>
-                        <span class="detail-value" id="pressure">--</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="forecast">
-                <h3>7-Tage Vorhersage</h3>
-                <div id="forecastContainer" class="forecast-container"></div>
-            </div>
-        </div>
+        <div id="weatherDisplay" class="weather-display hidden"></div>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
