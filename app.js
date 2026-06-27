@@ -8,6 +8,9 @@ let searchTimeout = null;
 let weatherMap = null;
 let currentWeatherData = null;
 let currentTileLayer = null;
+let lastFetchLat = null;
+let lastFetchLon = null;
+let lastFetchName = null;
 const favoriteKey = 'wetterApp_favorites';
 const themeKey = 'wetterApp_theme';
 
@@ -16,6 +19,7 @@ const searchBtn = document.getElementById('searchBtn');
 const suggestions = document.getElementById('suggestions');
 const errorDisplay = document.getElementById('errorDisplay');
 const mainContent = document.getElementById('mainContent');
+const loading = document.getElementById('loading');
 const unitC = document.getElementById('unitC');
 const unitF = document.getElementById('unitF');
 const geoBtn = document.getElementById('geoBtn');
@@ -55,9 +59,7 @@ geoBtn.addEventListener('click', () => {
     navigator.geolocation.getCurrentPosition(
         (pos) => {
             geoBtn.textContent = '📍';
-            const lat = pos.coords.latitude;
-            const lon = pos.coords.longitude;
-            reverseGeocode(lat, lon);
+            reverseGeocode(pos.coords.latitude, pos.coords.longitude);
         },
         () => {
             geoBtn.textContent = '📍';
@@ -73,13 +75,9 @@ async function reverseGeocode(lat, lon) {
     try {
         const res = await fetch(`${REVERSE_GEO_API}?latitude=${lat}&longitude=${lon}&localityLanguage=de`);
         const data = await res.json();
-        if (data.city) {
-            cityName = data.city;
-        } else if (data.locality) {
-            cityName = data.locality;
-        } else if (data.principalSubdivision) {
-            cityName = data.principalSubdivision;
-        }
+        if (data.city) cityName = data.city;
+        else if (data.locality) cityName = data.locality;
+        else if (data.principalSubdivision) cityName = data.principalSubdivision;
     } catch {}
     selectedCity = { lat, lon, name: cityName };
     cityInput.value = cityName;
@@ -102,6 +100,10 @@ cityInput.addEventListener('keydown', (e) => {
         const query = cityInput.value.trim();
         if (query) searchCity(query);
     }
+    if (e.key === 'Escape') {
+        suggestions.classList.add('hidden');
+        cityInput.blur();
+    }
 });
 
 searchBtn.addEventListener('click', () => {
@@ -111,6 +113,12 @@ searchBtn.addEventListener('click', () => {
 
 document.addEventListener('click', (e) => {
     if (!e.target.closest('.search-container')) {
+        suggestions.classList.add('hidden');
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
         suggestions.classList.add('hidden');
     }
 });
@@ -164,9 +172,24 @@ async function searchCity(query) {
     }
 }
 
+// ===== Loading =====
+function showLoading() {
+    loading.classList.remove('hidden');
+}
+
+function hideLoading() {
+    loading.classList.add('hidden');
+}
+
 // ===== Weather Fetch =====
-async function fetchWeather(lat, lon, name) {
+async function fetchWeather(lat, lon, name, isRetry) {
     hideError();
+    if (!isRetry) {
+        showLoading();
+        lastFetchLat = lat;
+        lastFetchLon = lon;
+        lastFetchName = name;
+    }
     const tempUnit = currentUnit === 'celsius' ? 'celsius' : 'fahrenheit';
     const url = `${WEATHER_API}?latitude=${lat}&longitude=${lon}` +
         `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,pressure_msl,wind_speed_10m,wind_direction_10m,is_day` +
@@ -182,8 +205,10 @@ async function fetchWeather(lat, lon, name) {
         currentWeatherData = data;
         renderWeather(data, name, lat, lon);
         updateFavButton();
+        hideLoading();
     } catch {
-        showError('Fehler beim Abrufen der Wetterdaten. Bitte versuche es später erneut.');
+        hideLoading();
+        showError('Fehler beim Abrufen der Wetterdaten. Bitte versuche es später erneut.', true);
     }
 }
 
@@ -196,7 +221,6 @@ function getWeatherIcon(code) {
     if (code <= 48) return '🌫️';
     if (code <= 55) return '🌦️';
     if (code <= 57) return '🌧️';
-    if (code <= 65) return '🌧️';
     if (code <= 67) return '🌧️';
     if (code <= 77) return '❄️';
     if (code <= 82) return '🌦️';
@@ -277,7 +301,6 @@ function renderWeather(data, name, lat, lon) {
     const daily = data.daily;
     const hourly = data.hourly;
     const unitSymbol = currentUnit === 'celsius' ? '°C' : '°F';
-    const windUnit = 'km/h';
     const today = new Date();
     const desc = getWeatherDesc(current.weather_code);
     const animIcon = buildAnimIcon(current.weather_code);
@@ -310,7 +333,7 @@ function renderWeather(data, name, lat, lon) {
                     </div>
                     <div class="detail-item">
                         <span class="detail-label">Wind</span>
-                        <span class="detail-value">${Math.round(current.wind_speed_10m)} ${windUnit} ${windDirToCompass(current.wind_direction_10m)}</span>
+                        <span class="detail-value">${Math.round(current.wind_speed_10m)} km/h ${windDirToCompass(current.wind_direction_10m)}</span>
                     </div>
                     <div class="detail-item">
                         <span class="detail-label">Luftdruck</span>
@@ -345,6 +368,8 @@ function renderWeather(data, name, lat, lon) {
                 <h3>Wetter-Karte</h3>
                 <div id="weatherMap"></div>
             </div>
+
+            <div class="last-update">Zuletzt aktualisiert: ${today.toLocaleTimeString('de-DE')}</div>
         </div>
     `;
 
@@ -435,6 +460,9 @@ function initMap(lat, lon, name) {
         scrollWheelZoom: false,
         attributionControl: true
     }).setView([lat, lon], 10);
+
+    weatherMap.on('focus', () => weatherMap.scrollWheelZoom.enable());
+    weatherMap.on('blur', () => weatherMap.scrollWheelZoom.disable());
 
     currentTileLayer = createTileLayer(document.body.classList.contains('dark')).addTo(weatherMap);
 
@@ -540,13 +568,25 @@ function renderFavorites() {
 }
 
 // ===== Errors =====
-function showError(msg) {
-    errorDisplay.textContent = msg;
+function showError(msg, showRetry) {
+    errorDisplay.innerHTML = msg;
+    if (showRetry && lastFetchLat != null) {
+        errorDisplay.innerHTML += `
+            <br><button class="retry-btn" onclick="retryLastFetch()">Erneut versuchen</button>
+        `;
+    }
     errorDisplay.classList.remove('hidden');
 }
 
 function hideError() {
     errorDisplay.classList.add('hidden');
+    errorDisplay.innerHTML = '';
+}
+
+function retryLastFetch() {
+    if (lastFetchLat != null) {
+        fetchWeather(lastFetchLat, lastFetchLon, lastFetchName, true);
+    }
 }
 
 // ===== Init =====
