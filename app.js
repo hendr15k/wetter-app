@@ -11,8 +11,13 @@ let currentTileLayer = null;
 let lastFetchLat = null;
 let lastFetchLon = null;
 let lastFetchName = null;
+const AQI_API = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const favoriteKey = 'wetterApp_favorites';
 const themeKey = 'wetterApp_theme';
+const lastCityKey = 'wetterApp_lastCity';
+const unitKey = 'wetterApp_unit';
+
+let autoRefreshTimer = null;
 
 const cityInput = document.getElementById('cityInput');
 const searchBtn = document.getElementById('searchBtn');
@@ -34,6 +39,12 @@ function initTheme() {
     if (saved === 'dark') {
         document.body.classList.add('dark');
         themeBtn.textContent = '☀️';
+    }
+    const savedUnit = localStorage.getItem(unitKey);
+    if (savedUnit === 'fahrenheit') {
+        currentUnit = 'fahrenheit';
+        unitF.classList.add('active');
+        unitC.classList.remove('active');
     }
 }
 
@@ -181,20 +192,68 @@ function hideLoading() {
     loading.classList.add('hidden');
 }
 
-// ===== Weather Fetch =====
-async function fetchWeather(lat, lon, name, isRetry) {
-    hideError();
-    if (!isRetry) {
-        showLoading();
-        lastFetchLat = lat;
-        lastFetchLon = lon;
-        lastFetchName = name;
+// ===== Last City Persistence =====
+function saveLastCity(lat, lon, name) {
+    localStorage.setItem(lastCityKey, JSON.stringify({ lat, lon, name }));
+}
+
+function loadLastCity() {
+    try {
+        return JSON.parse(localStorage.getItem(lastCityKey));
+    } catch {
+        return null;
     }
+}
+
+// ===== Auto-Refresh =====
+function scheduleAutoRefresh(lat, lon, name) {
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    autoRefreshTimer = setInterval(() => {
+        fetchWeather(lat, lon, name, true);
+    }, 600000);
+}
+
+// ===== Air Quality =====
+async function fetchAirQuality(lat, lon) {
+    try {
+        const res = await fetch(`${AQI_API}?latitude=${lat}&longitude=${lon}&current=european_aqi`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const aqi = data.current?.european_aqi;
+        const el = document.getElementById('aqiValue');
+        if (el) {
+            el.textContent = aqi != null ? aqiLabel(aqi) : '--';
+        }
+    } catch {
+        const el = document.getElementById('aqiValue');
+        if (el) el.textContent = '--';
+    }
+}
+
+function aqiLabel(aqi) {
+    if (aqi <= 20) return `${aqi} (Sehr gut)`;
+    if (aqi <= 40) return `${aqi} (Gut)`;
+    if (aqi <= 60) return `${aqi} (Mäßig)`;
+    if (aqi <= 80) return `${aqi} (Schlecht)`;
+    return `${aqi} (Sehr schlecht)`;
+}
+
+// ===== Weather Fetch =====
+async function fetchWeather(lat, lon, name, isSilent) {
+    hideError();
+    const showLoad = !isSilent;
+    if (showLoad) showLoading();
+
+    lastFetchLat = lat;
+    lastFetchLon = lon;
+    lastFetchName = name;
+    saveLastCity(lat, lon, name);
+
     const tempUnit = currentUnit === 'celsius' ? 'celsius' : 'fahrenheit';
     const url = `${WEATHER_API}?latitude=${lat}&longitude=${lon}` +
         `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,pressure_msl,wind_speed_10m,wind_direction_10m,is_day` +
         `&hourly=weather_code,temperature_2m,precipitation_probability` +
-        `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max` +
+        `&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_sum` +
         `&timezone=auto&forecast_days=7` +
         `&temperature_unit=${tempUnit}`;
 
@@ -205,10 +264,14 @@ async function fetchWeather(lat, lon, name, isRetry) {
         currentWeatherData = data;
         renderWeather(data, name, lat, lon);
         updateFavButton();
+        scheduleAutoRefresh(lat, lon, name);
+        fetchAirQuality(lat, lon);
         hideLoading();
     } catch {
         hideLoading();
-        showError('Fehler beim Abrufen der Wetterdaten. Bitte versuche es später erneut.', true);
+        if (!isSilent) {
+            showError('Fehler beim Abrufen der Wetterdaten. Bitte versuche es später erneut.', true);
+        }
     }
 }
 
@@ -308,6 +371,8 @@ function renderWeather(data, name, lat, lon) {
     const sunriseStr = daily.sunrise ? formatTime(daily.sunrise[0]) : '--';
     const sunsetStr = daily.sunset ? formatTime(daily.sunset[0]) : '--';
     const uvMax = daily.uv_index_max ? daily.uv_index_max[0].toFixed(1) : null;
+    const precip = daily.precipitation_sum ? daily.precipitation_sum[0] : null;
+    const precipText = precip != null ? `${precip.toFixed(1)} mm` : '--';
 
     mainContent.innerHTML = `
         <div class="weather-display">
@@ -336,6 +401,10 @@ function renderWeather(data, name, lat, lon) {
                         <span class="detail-value">${Math.round(current.wind_speed_10m)} km/h ${windDirToCompass(current.wind_direction_10m)}</span>
                     </div>
                     <div class="detail-item">
+                        <span class="detail-label">Niederschlag</span>
+                        <span class="detail-value">🌧️ ${precipText}</span>
+                    </div>
+                    <div class="detail-item">
                         <span class="detail-label">Luftdruck</span>
                         <span class="detail-value">${Math.round(current.pressure_msl)} hPa</span>
                     </div>
@@ -346,6 +415,10 @@ function renderWeather(data, name, lat, lon) {
                     <div class="detail-item">
                         <span class="detail-label">Sonnenauf/-untergang</span>
                         <span class="detail-value">🌅 ${sunriseStr} · 🌇 ${sunsetStr}</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Luftqualität (AQI)</span>
+                        <span class="detail-value" id="aqiValue">Lädt...</span>
                     </div>
                 </div>
             </div>
@@ -485,6 +558,7 @@ function initMap(lat, lon, name) {
 unitC.addEventListener('click', () => {
     if (currentUnit === 'celsius') return;
     currentUnit = 'celsius';
+    localStorage.setItem(unitKey, 'celsius');
     unitC.classList.add('active');
     unitF.classList.remove('active');
     if (selectedCity) fetchWeather(selectedCity.lat, selectedCity.lon, selectedCity.name);
@@ -493,6 +567,7 @@ unitC.addEventListener('click', () => {
 unitF.addEventListener('click', () => {
     if (currentUnit === 'fahrenheit') return;
     currentUnit = 'fahrenheit';
+    localStorage.setItem(unitKey, 'fahrenheit');
     unitF.classList.add('active');
     unitC.classList.remove('active');
     if (selectedCity) fetchWeather(selectedCity.lat, selectedCity.lon, selectedCity.name);
@@ -585,10 +660,17 @@ function hideError() {
 
 function retryLastFetch() {
     if (lastFetchLat != null) {
-        fetchWeather(lastFetchLat, lastFetchLon, lastFetchName, true);
+        fetchWeather(lastFetchLat, lastFetchLon, lastFetchName);
     }
 }
 
 // ===== Init =====
 initTheme();
 renderFavorites();
+
+const lastCity = loadLastCity();
+if (lastCity && lastCity.lat && lastCity.lon) {
+    selectedCity = { lat: lastCity.lat, lon: lastCity.lon, name: lastCity.name };
+    cityInput.value = lastCity.name;
+    fetchWeather(lastCity.lat, lastCity.lon, lastCity.name);
+}
